@@ -254,11 +254,38 @@ export async function mintChips(
 
     const wallet = await getWalletAccount(superAdminId);
 
-    // For minting, we credit from system_reserve (which can go negative conceptually)
-    // But we'll add balance to system_reserve first, then transfer
+    // For minting, we credit the system_reserve first with a ledger entry,
+    // then transfer from system_reserve to wallet via executeTransfer.
+
+    // Lock and read current system_reserve state
+    const sysResult = await client.query(
+      `SELECT id, balance, version FROM chip_accounts WHERE id = $1 FOR UPDATE`,
+      [systemAccount.id]
+    );
+    const sysBalance = parseFloat(sysResult.rows[0].balance);
+    const sysVersion = sysResult.rows[0].version;
+    const newSysBalance = sysBalance + amount;
+    const newSysVersion = sysVersion + 1;
+
+    // Update system_reserve balance
     await client.query(
-      `UPDATE chip_accounts SET balance = balance + $1, version = version + 1 WHERE id = $2`,
-      [amount, systemAccount.id]
+      `UPDATE chip_accounts SET balance = $1, version = $2, updated_at = NOW() WHERE id = $3`,
+      [newSysBalance, newSysVersion, systemAccount.id]
+    );
+
+    // Create a mint-credit transfer record for the system_reserve top-up
+    const mintCreditTransfer = await client.query(
+      `INSERT INTO chip_transfers (from_account_id, to_account_id, amount, transfer_type, initiated_by, description, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [systemAccount.id, systemAccount.id, amount, 'mint_credit', superAdminId, `Mint credit of ${amount} chips to system reserve`, '{}']
+    );
+
+    // Create the corresponding credit ledger entry so reconciliation stays balanced
+    await client.query(
+      `INSERT INTO chip_ledger_entries (transfer_id, account_id, entry_type, amount, previous_balance, current_balance, account_version)
+       VALUES ($1, $2, 'credit', $3, $4, $5, $6)`,
+      [mintCreditTransfer.rows[0].id, systemAccount.id, amount, sysBalance, newSysBalance, newSysVersion]
     );
 
     return executeTransfer(

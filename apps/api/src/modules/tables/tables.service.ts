@@ -85,8 +85,7 @@ export async function createTable(data: {
 
 export async function getTable(tableId: string): Promise<TableRecord> {
   const table = await queryOne<TableRecord>(
-    `SELECT t.*, 
-            (SELECT COUNT(*) FROM user_hierarchy_paths WHERE ancestor_id = t.id) as player_count
+    `SELECT t.*
      FROM game_tables t
      WHERE t.id = $1`,
     [tableId]
@@ -95,6 +94,10 @@ export async function getTable(tableId: string): Promise<TableRecord> {
   if (!table) {
     throw new NotFoundError('Table');
   }
+
+  // Player count comes from in-memory game state, not the DB
+  const gameState = activeGames.get(tableId);
+  table.player_count = gameState ? gameState.players.size : 0;
 
   return table;
 }

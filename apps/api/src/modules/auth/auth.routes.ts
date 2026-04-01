@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import * as authService from './auth.service';
 import { UserTier } from '../../utils/permissions';
+import { authenticate } from '../../middleware/auth.middleware';
 
 const router = Router();
 
@@ -17,7 +18,6 @@ const registerSchema = z.object({
   email: z.string().email().optional(),
   displayName: z.string().max(100).optional(),
   parentId: z.string().uuid().optional(),
-  tier: z.nativeEnum(UserTier).default(UserTier.PLAYER),
 });
 
 const refreshSchema = z.object({
@@ -37,7 +37,7 @@ router.post('/login', async (req: Request, res: Response, next: NextFunction) =>
 router.post('/register', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = registerSchema.parse(req.body);
-    const result = await authService.register(data);
+    const result = await authService.register({ ...data, tier: UserTier.PLAYER });
     res.status(201).json({ success: true, data: result });
   } catch (error) {
     next(error);
@@ -54,9 +54,9 @@ router.post('/refresh', async (req: Request, res: Response, next: NextFunction) 
   }
 });
 
-router.post('/logout', async (req: Request, res: Response, next: NextFunction) => {
+router.post('/logout', authenticate, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const userId = (req as Request & { userId?: string }).userId;
+    const userId = req.userId;
     if (userId) {
       await authService.logout(userId);
     }

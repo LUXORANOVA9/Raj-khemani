@@ -257,14 +257,21 @@ export function processAction(
     return { success: false, message: 'Game is not in betting phase' };
   }
 
-  const currentPlayerId = getCurrentPlayerId(state);
-  if (currentPlayerId !== playerId) {
-    return { success: false, message: 'Not your turn' };
-  }
-
   const player = state.players.get(playerId);
   if (!player || player.status !== PlayerStatus.ACTIVE) {
     return { success: false, message: 'Player is not active' };
+  }
+
+  // Sideshow accept/reject must be handled by the target, not the current turn player
+  if (state.sideshowPending && (actionType === 'sideshow_accept' || actionType === 'sideshow_reject')) {
+    if (state.sideshowPending.targetId !== playerId) {
+      return { success: false, message: 'No sideshow pending for you' };
+    }
+  } else {
+    const currentPlayerId = getCurrentPlayerId(state);
+    if (currentPlayerId !== playerId) {
+      return { success: false, message: 'Not your turn' };
+    }
   }
 
   switch (actionType) {
