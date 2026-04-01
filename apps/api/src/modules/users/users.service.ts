@@ -112,7 +112,7 @@ export async function createChildUser(
 
   const passwordHash = await bcrypt.hash(data.password, 12);
 
-  return withTransaction(async (client) => {
+  const userId = await withTransaction(async (client) => {
     const result = await client.query(
       `INSERT INTO users (username, phone, email, password_hash, role_id, parent_id, display_name, commission_rate, is_active, is_verified)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, false)
@@ -128,31 +128,34 @@ export async function createChildUser(
         data.commissionRate || 0,
       ]
     );
-    const userId = result.rows[0].id;
+    const newUserId = result.rows[0].id as string;
 
     // Create wallet
     await client.query(
       `INSERT INTO chip_accounts (owner_id, account_type, balance) VALUES ($1, 'wallet', 0.00)`,
-      [userId]
+      [newUserId]
     );
 
     // Build hierarchy paths: self-reference + all ancestors
     await client.query(
       `INSERT INTO user_hierarchy_paths (ancestor_id, descendant_id, depth) VALUES ($1, $1, 0)`,
-      [userId]
+      [newUserId]
     );
     await client.query(
       `INSERT INTO user_hierarchy_paths (ancestor_id, descendant_id, depth)
        SELECT ancestor_id, $1, depth + 1
        FROM user_hierarchy_paths
        WHERE descendant_id = $2`,
-      [userId, parentId]
+      [newUserId, parentId]
     );
 
-    logger.info('Child user created', { parentId, childId: userId, tier: childTier });
+    logger.info('Child user created', { parentId, childId: newUserId, tier: childTier });
 
-    return getUserById(userId);
+    return newUserId;
   });
+
+  // Fetch full profile after transaction has committed
+  return getUserById(userId);
 }
 
 export async function updateUser(

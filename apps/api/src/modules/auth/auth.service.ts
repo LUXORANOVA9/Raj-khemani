@@ -176,7 +176,7 @@ export async function register(data: {
 
   const passwordHash = await bcrypt.hash(data.password, 12);
 
-  return withTransaction(async (client) => {
+  const userId = await withTransaction(async (client) => {
     // Create user
     const userResult = await client.query(
       `INSERT INTO users (username, phone, email, password_hash, role_id, parent_id, display_name, is_active, is_verified)
@@ -184,19 +184,19 @@ export async function register(data: {
        RETURNING id`,
       [data.username, data.phone || null, data.email || null, passwordHash, role.id, data.parentId || null, data.displayName || data.username]
     );
-    const userId = userResult.rows[0].id;
+    const newUserId = userResult.rows[0].id as string;
 
     // Create chip wallet
     await client.query(
       `INSERT INTO chip_accounts (owner_id, account_type, balance) VALUES ($1, 'wallet', 0.00)`,
-      [userId]
+      [newUserId]
     );
 
     // Build hierarchy paths
     // Self-reference
     await client.query(
       `INSERT INTO user_hierarchy_paths (ancestor_id, descendant_id, depth) VALUES ($1, $1, 0)`,
-      [userId]
+      [newUserId]
     );
 
     // Copy parent's ancestor paths and extend
@@ -206,38 +206,40 @@ export async function register(data: {
          SELECT ancestor_id, $1, depth + 1
          FROM user_hierarchy_paths
          WHERE descendant_id = $2`,
-        [userId, data.parentId]
+        [newUserId, data.parentId]
       );
     }
 
-    // Generate tokens
-    const user: UserRecord = {
-      id: userId,
-      username: data.username,
-      phone: data.phone || null,
-      email: data.email || null,
-      password_hash: passwordHash,
-      role_id: role.id,
-      parent_id: data.parentId || null,
-      display_name: data.displayName || data.username,
-      is_active: true,
-      is_verified: false,
-      tier_level: data.tier,
-      role_name: role.name,
-      permissions: getPermissionsForTier(data.tier).toString(),
-      commission_rate: '0.00',
-    };
+    logger.info('User registered', { userId: newUserId, username: data.username, tier: data.tier });
 
-    const accessToken = generateAccessToken(user);
-    const refreshToken = await generateRefreshToken(userId);
-
-    logger.info('User registered', { userId, username: data.username, tier: data.tier });
-
-    return {
-      userId,
-      tokens: { accessToken, refreshToken, expiresIn: env.JWT_EXPIRY },
-    };
+    return newUserId;
   });
+
+  // Generate tokens after transaction has committed
+  const user: UserRecord = {
+    id: userId,
+    username: data.username,
+    phone: data.phone || null,
+    email: data.email || null,
+    password_hash: passwordHash,
+    role_id: role.id,
+    parent_id: data.parentId || null,
+    display_name: data.displayName || data.username,
+    is_active: true,
+    is_verified: false,
+    tier_level: data.tier,
+    role_name: role.name,
+    permissions: getPermissionsForTier(data.tier).toString(),
+    commission_rate: '0.00',
+  };
+
+  const accessToken = generateAccessToken(user);
+  const refreshToken = await generateRefreshToken(userId);
+
+  return {
+    userId,
+    tokens: { accessToken, refreshToken, expiresIn: env.JWT_EXPIRY },
+  };
 }
 
 export async function logout(userId: string): Promise<void> {
